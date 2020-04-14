@@ -1,0 +1,33 @@
+#!/bin/sh
+
+if [ "$#" -lt "2" ]
+then
+	cat <<-tac
+		USAGE: $0 <token> <filename>...
+
+		Each filename should match its desired emoji name.
+
+		To find your auth token:
+		1. Go to: https://orgvanize.slack.com/customize/emoji
+		2. Hit Add Custom Emoji.
+		3. Upload an image file and give it any name, but do not submit yet.
+		4. From your browser's dev tools, open the network requests tracer.
+		5. Submit the form to add the emoji.
+		6. Find the POST request to Slack's /api/emoji.add and examine it.
+		7. The token will be at the end of its payload.
+		8. Delete your temporary emoji using the Web interface if you like.
+	tac
+	exit 1
+fi
+
+token="$1"
+shift
+
+for filename in "$@"
+do
+	basename="`basename "$filename"`"
+	emojiname="`echo "$basename" | sed 's/\.[^.]*//'`"
+	printf %s "$basename: "
+	curl -Fmode=data -Fname="$emojiname" -Fimage=@"$filename" -Ftoken="$token" "https://orgvanize.slack.com/api/emoji.add"
+	echo
+done
