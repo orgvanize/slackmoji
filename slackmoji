@@ -30,4 +30,5 @@ do
 	printf %s "$basename: "
 	curl -Fmode=data -Fname="$emojiname" -Fimage=@"$filename" -Ftoken="$token" "https://orgvanize.slack.com/api/emoji.add"
 	echo
+	sleep 3
 done
