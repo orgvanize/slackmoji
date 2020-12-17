@@ -16,6 +16,8 @@
 // Copyright (C) 2020, Sol Boucher
 // Copyright (C) 2020, The Vanguard Campaign Corps Mods (vanguardcampaign.org)
 
+const BACKOFF = 60;
+
 const fs = require('fs').promises;
 const https = require('https');
 
@@ -88,6 +90,12 @@ async function collect_call(method, body, array, workspace) {
 	return collected;
 }
 
+function sleep(ms) {
+	return new Promise(function(resolve) {
+		setTimeout(resolve, ms);
+	});
+}
+
 function messageCompare(left, right) {
 	return left.ts.localeCompare(right.ts);
 }
@@ -119,6 +127,11 @@ async function main(token, id) {
 	for(var message of messages)
 		if(message.thread_ts) {
 			var replies = await collect_call('conversations.replies?channel=' + channel.id + '&ts=' + message.thread_ts, null, 'messages', token);
+			if(!replies) {
+				console.warn('conversation.replies failed; pausing for ' + BACKOFF + ' seconds...');
+				await sleep(BACKOFF * 1000);
+				replies = await collect_call('conversations.replies?channel=' + channel.id + '&ts=' + message.thread_ts, null, 'messages', token);
+			}
 			if(!replies) {
 				console.error('conversations.replies error');
 				process.exit(5);
