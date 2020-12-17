@@ -1,0 +1,150 @@
+#!/usr/bin/node
+
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//
+// Copyright (C) 2020, Sol Boucher
+// Copyright (C) 2020, The Vanguard Campaign Corps Mods (vanguardcampaign.org)
+
+const fs = require('fs').promises;
+const https = require('https');
+
+if(process.argv.length != 4) {
+	console.log('USAGE: ' + process.argv[1] + ' <token> <channelid>\n'
+		+ '\nObtain <token> as described in slackmoji\'s USAGE string.'
+		+ '\nObtain <channelid> from the last part of the URL when Slack is open.'
+	);
+	process.exit(1);
+}
+main(process.argv[2], process.argv[3]).catch(function(reason) {
+	console.error(String(reason));
+	process.exit(5);
+});
+
+function stringify(stream) {
+	return new Promise(function(resolve) {
+		var chunks = [];
+		stream.setEncoding('utf8');
+		stream.on('data', function(chunk) {
+			chunks.push(chunk);
+		});
+		stream.on('end', function() {
+			resolve(chunks.join(''));
+		});
+	});
+}
+
+function call(method, body, token) {
+	var header = {
+		headers: {
+			Authorization: 'Bearer ' + token,
+		},
+	};
+	var payload = '';
+	if(body) {
+		header.method = 'POST';
+		header.headers['Content-Type'] = 'application/json';
+		payload = JSON.stringify(body);
+	}
+
+	var request = https.request('https://slack.com/api/' + method, header);
+	var response = new Promise(function(resolve) {
+		request.on('response', async function(res) {
+			resolve(JSON.parse(await stringify(res)));
+		});
+	});
+	request.end(payload);
+	return response;
+}
+
+async function collect_call(method, body, array, workspace) {
+	var collected = [];
+	var cursor = '';
+	var delim = '?';
+	if(method.indexOf('?') != -1)
+		delim = '&';
+	do {
+		var it = await call(method + cursor, body, workspace);
+		if(!it.ok)
+			return null;
+
+		collected = collected.concat(it[array]);
+		if(it.response_metadata && it.response_metadata.next_cursor) {
+			cursor = it.response_metadata.next_cursor;
+			cursor = delim + 'cursor=' + cursor.replace(/=/g, '%3D');
+		} else
+			cursor = '';
+	} while(cursor);
+	return collected;
+}
+
+function messageCompare(left, right) {
+	return left.ts.localeCompare(right.ts);
+}
+
+async function main(token, id) {
+	var channel = await call('conversations.info?channel=' + id, null, token);
+	if(!channel || !channel.ok) {
+		console.error('conversations.info error' + (console.error ? ': ' + channel.error : ''));
+		process.exit(2);
+	}
+	channel = channel.channel;
+
+	var file = await fs.open(channel.name + '.json', 'ax');
+	var members = await collect_call('conversations.members?channel=' + channel.id, null, 'members', token);
+	if(!members) {
+		console.error('conversations.members error');
+		process.exit(3);
+	}
+
+	var messages = await collect_call('conversations.history?channel=' + channel.id, null, 'messages', token);
+	if(!messages) {
+		console.error('conversations.history error');
+		process.exit(4);
+	}
+	messages = messages.sort(messageCompare);
+
+	for(var message of messages)
+		if(message.thread_ts) {
+			var replies = await collect_call('conversations.replies?channel=' + channel.id + '&ts=' + message.thread_ts, null, 'messages', token);
+			if(!replies) {
+				console.error('conversations.replies error');
+				process.exit(5);
+			}
+			replies = replies.sort(messageCompare);
+			replies.shift();
+			if(replies.length)
+				message.thread = replies;
+		}
+
+	var users = {};
+	for(var member of members) {
+		var user = await call('users.info?user=' + member, null, token);
+		if(!user || !user.ok) {
+			console.warn('users.info warning' + (user.error ? ': ' + user.error : ''));
+			users = null;
+			break;
+		}
+		users[member] = user.user;
+	}
+	if(!users)
+		users = members;
+
+	var dump = {
+		channel: channel,
+		members: users,
+		messages: messages,
+	};
+	await file.write(JSON.stringify(dump, null, 1));
+	await file.close();
+}
